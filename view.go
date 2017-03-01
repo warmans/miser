@@ -106,9 +106,7 @@ func (v *TimeseriesView) Update(tx *sql.Tx) error {
 	deleteSQL := fmt.Sprintf("DELETE FROM %s WHERE %s", v.Name, offsets.DestinationOffsetSQL)
 	_, err = tx.Exec(deleteSQL)
 	if err != nil {
-		if rollbackErr := tx.Rollback(); err != nil {
-			return fmt.Errorf("rollback error: %s (rollbacked triggered by error: %s)", rollbackErr, err)
-		}
+		return err
 	}
 
 	updateSQL := fmt.Sprintf(
@@ -121,9 +119,7 @@ func (v *TimeseriesView) Update(tx *sql.Tx) error {
 	)
 	_, err = tx.Exec(updateSQL)
 	if err != nil {
-		if rollbackErr := tx.Rollback(); err != nil {
-			return fmt.Errorf("rollback error: %s (rollbacked triggered by error: %s)", rollbackErr, err)
-		}
+		return err
 	}
 	return nil
 }
