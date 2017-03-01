@@ -60,8 +60,8 @@ type StandardViewColumn struct {
 	IsKey      bool
 }
 
-//StandardView represents the materialised view capable of doing incremental updates
-type StandardView struct {
+//TimeseriesView represents the materialised view capable of doing incremental updates
+type TimeseriesView struct {
 	Name            string
 	SourceTableName string
 	UpdateInterval  time.Duration
@@ -70,15 +70,15 @@ type StandardView struct {
 	TrackBy         Tracker
 }
 
-func (v *StandardView) GetName() string {
+func (v *TimeseriesView) GetName() string {
 	return v.Name
 }
 
-func (v *StandardView) GetUpdateInterval() time.Duration {
+func (v *TimeseriesView) GetUpdateInterval() time.Duration {
 	return v.UpdateInterval
 }
 
-func (v *StandardView) Setup(tx *sql.Tx) error {
+func (v *TimeseriesView) Setup(tx *sql.Tx) error {
 
 	//setup table
 	_, err := tx.Exec(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (%s)`, v.Name, strings.Join(v.getCreateColumns(), ", ")))
@@ -96,7 +96,7 @@ func (v *StandardView) Setup(tx *sql.Tx) error {
 	return nil
 }
 
-func (v *StandardView) Update(tx *sql.Tx) error {
+func (v *TimeseriesView) Update(tx *sql.Tx) error {
 
 	offsets, err := v.TrackBy.GetOffsets(v.Name, tx)
 	if err != nil {
@@ -128,7 +128,7 @@ func (v *StandardView) Update(tx *sql.Tx) error {
 	return nil
 }
 
-func (v *StandardView) getCreateColumns() []string {
+func (v *TimeseriesView) getCreateColumns() []string {
 	columns := make([]string, 0)
 	for _, col := range v.Columns {
 		columns = append(columns, col.CreateSpec)
@@ -136,7 +136,7 @@ func (v *StandardView) getCreateColumns() []string {
 	return columns
 }
 
-func (v *StandardView) getSelectColumns() []string {
+func (v *TimeseriesView) getSelectColumns() []string {
 	columns := make([]string, len(v.Columns))
 	for k, col := range v.Columns {
 		columns[k] = col.SelectSpec
@@ -144,7 +144,7 @@ func (v *StandardView) getSelectColumns() []string {
 	return columns
 }
 
-func (v *StandardView) getGroupColumns() []string {
+func (v *TimeseriesView) getGroupColumns() []string {
 	columns := make([]string, 0)
 	for _, col := range v.Columns {
 		if col.IsKey {
