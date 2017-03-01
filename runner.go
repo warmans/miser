@@ -41,7 +41,6 @@ func (r *Runner) Run() {
 		if err := r.runOnce(); err != nil {
 			r.logger.Printf("Run failed: %s", err.Error())
 		}
-		r.logger.Printf("All aggregates completed OK")
 		time.Sleep(time.Minute)
 	}
 }

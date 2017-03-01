@@ -54,16 +54,20 @@ type View interface {
 	GetUpdateInterval() time.Duration
 }
 
-//View represents the materialised view
+type StandardViewColumn struct {
+	CreateSpec string
+	SelectSpec string
+	IsKey      bool
+}
+
+//StandardView represents the materialised view capable of doing incremental updates
 type StandardView struct {
 	Name            string
 	SourceTableName string
 	UpdateInterval  time.Duration
-	Columns         []string
+	Columns         []*StandardViewColumn
 	Indexes         []string
 	TrackBy         Tracker
-	Dimensions      []string
-	Metrics         []string
 }
 
 func (v *StandardView) GetName() string {
@@ -77,7 +81,7 @@ func (v *StandardView) GetUpdateInterval() time.Duration {
 func (v *StandardView) Setup(tx *sql.Tx) error {
 
 	//setup table
-	_, err := tx.Exec(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (%s)`, v.Name, strings.Join(v.Columns, ", ")))
+	_, err := tx.Exec(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (%s)`, v.Name, strings.Join(v.getCreateColumns(), ", ")))
 	if err != nil {
 		return fmt.Errorf("Create failed: %s", err)
 	}
@@ -110,10 +114,10 @@ func (v *StandardView) Update(tx *sql.Tx) error {
 	updateSQL := fmt.Sprintf(
 		"INSERT INTO %s SELECT %s FROM %s WHERE %s GROUP BY %s",
 		v.Name,
-		strings.Join(append(v.Dimensions, v.Metrics...), ", "),
+		strings.Join(v.getSelectColumns(), ", "),
 		v.SourceTableName,
 		offsets.SourceOffsetSQL,
-		strings.Join(v.Dimensions, ", "),
+		strings.Join(v.getGroupColumns(), ", "),
 	)
 	_, err = tx.Exec(updateSQL)
 	if err != nil {
@@ -121,6 +125,110 @@ func (v *StandardView) Update(tx *sql.Tx) error {
 			return fmt.Errorf("rollback error: %s (rollbacked triggered by error: %s)", rollbackErr, err)
 		}
 	}
-
 	return nil
+}
+
+func (v *StandardView) getCreateColumns() []string {
+	columns := make([]string, 0)
+	for _, col := range v.Columns {
+		columns = append(columns, col.CreateSpec)
+	}
+	return columns
+}
+
+func (v *StandardView) getSelectColumns() []string {
+	columns := make([]string, len(v.Columns))
+	for k, col := range v.Columns {
+		columns[k] = col.SelectSpec
+	}
+	return columns
+}
+
+func (v *StandardView) getGroupColumns() []string {
+	columns := make([]string, 0)
+	for _, col := range v.Columns {
+		if col.IsKey {
+			columns = append(columns, col.SelectSpec)
+		}
+	}
+	return columns
+}
+
+// SQLView represents a simplified materialised view without incremental updates but more freedom in SELECT
+// used to populate table.
+type SQLView struct {
+	Table          *TableSpec
+	DataSelectSQL  string
+	UpdateInterval time.Duration
+}
+
+func (v *SQLView) GetName() string {
+	return v.Table.Name
+}
+
+func (v *SQLView) Setup(tx *sql.Tx) error {
+	return nil
+}
+
+func (v *SQLView) Update(tx *sql.Tx) error {
+
+	//create the temp table
+	tempName := fmt.Sprintf(`%s_temp`, v.Table.Name)
+
+	dropTempStmnt := fmt.Sprintf("DROP TABLE IF EXISTS %s", tempName)
+	if _, err := tx.Exec(dropTempStmnt); err != nil {
+		return fmt.Errorf("drop temp table failed: %s (%s)", err, dropTempStmnt)
+	}
+
+	createStmnt := fmt.Sprintf("CREATE TABLE %s %s", tempName, v.Table.Spec)
+	if _, err := tx.Exec(createStmnt); err != nil {
+		return fmt.Errorf("create table failed: %s (%s)", err, createStmnt)
+	}
+
+	//add the indexes
+	for k, indexSpec := range v.Table.Indexes {
+		indexName := fmt.Sprintf("idx_%s_%d_temp", v.Table.Name, k)
+		indexStmnt := fmt.Sprintf("DROP INDEX IF EXISTS %s; CREATE INDEX %s ON %s %s", indexName, indexName, tempName, indexSpec)
+		if _, err := tx.Exec(indexStmnt); err != nil {
+			return fmt.Errorf("create index %d failed: %s (%s)", k, err, indexStmnt)
+		}
+	}
+
+	//create the data
+	insertStmnt := fmt.Sprintf("INSERT INTO %s %s", tempName, v.DataSelectSQL)
+	if _, err := tx.Exec(insertStmnt); err != nil {
+		return fmt.Errorf("inserts failed: %s (%s)", err, insertStmnt)
+	}
+
+	//remove old table
+	dropStmnt := fmt.Sprintf("DROP TABLE IF EXISTS %s", v.Table.Name)
+	if _, err := tx.Exec(dropStmnt); err != nil {
+		return fmt.Errorf("drop table failed: %s (%s)", err, dropStmnt)
+	}
+
+	//replace table
+	alterTableStmnt := fmt.Sprintf("ALTER TABLE %s RENAME TO %s", tempName, v.Table.Name)
+	if _, err := tx.Exec(alterTableStmnt); err != nil {
+		return fmt.Errorf("rename table failed: %s (%s)", err, alterTableStmnt)
+	}
+
+	//replace indxes
+	for k := range v.Table.Indexes {
+		indexName := fmt.Sprintf("idx_%s_%d", v.Table.Name, k)
+		alterIndexStmnt := fmt.Sprintf("DROP INDEX IF EXISTS %s; ALTER INDEX %s_temp RENAME TO %s", indexName, indexName, indexName)
+		if _, err := tx.Exec(alterIndexStmnt); err != nil {
+			return fmt.Errorf("rename table failed: %s (%s)", err, alterIndexStmnt)
+		}
+	}
+	return nil
+}
+
+func (v *SQLView) GetUpdateInterval() time.Duration {
+	return v.UpdateInterval
+}
+
+type TableSpec struct {
+	Name    string
+	Spec    string
+	Indexes []string
 }
