@@ -33,10 +33,21 @@ func (r *Runner) setup() error {
 
 func (r *Runner) Run() {
 	//setup basic stuff needed to run
-	if err := r.setup(); err != nil {
-		r.logger.Printf("Setup failed. Aggregator must exit: %s", err.Error())
-		return
+	retries := 10
+	for {
+		retries--
+		if retries <= 0 {
+			r.logger.Printf("Aggregates failed permanently")
+			return
+		}
+		if err := r.setup(); err != nil {
+			r.logger.Printf("Setup failed (%s). Retrying... ", err.Error())
+			time.Sleep(time.Second * 6)
+			continue
+		}
+		break //success
 	}
+
 	for {
 		if err := r.runOnce(); err != nil {
 			r.logger.Printf("Run failed: %s", err.Error())
