@@ -78,7 +78,7 @@ func (r *Runner) runOnce() error {
 
 		//find last run time for view
 		var lastRun time.Time
-		if err = tx.QueryRow("SELECT COALESCE(MAX(created), TIMESTAMP 'epoch') FROM agg_log WHERE view = $1", view.GetName()).Scan(&lastRun); err != nil {
+		if err = tx.QueryRow("SELECT COALESCE(MAX(created), TIMESTAMP 'epoch') FROM materialiser_log WHERE view = $1", view.GetName()).Scan(&lastRun); err != nil {
 			if err != sql.ErrNoRows {
 				r.logger.Printf("Failed to find last run time: %s", err)
 				if err = tx.Rollback(); err != nil {
@@ -113,7 +113,7 @@ func (r *Runner) runOnce() error {
 		}
 
 		//log completion stats
-		_, err = tx.Exec("INSERT INTO agg_log (host, view, duration_sec) VALUES ($1, $2, $3)", hostname, view.GetName(), time.Since(started).Seconds())
+		_, err = tx.Exec("INSERT INTO materialiser_log (host, view, duration_sec) VALUES ($1, $2, $3)", hostname, view.GetName(), time.Since(started).Seconds())
 		if err != nil {
 			r.logger.Printf("Lock log create failed: %s", err)
 			if err = tx.Rollback(); err != nil {
@@ -132,7 +132,7 @@ func (r *Runner) runOnce() error {
 }
 
 func (r *Runner) Lock(tx *sql.Tx) error {
-	_, err := tx.Exec("LOCK TABLE agg_log IN ACCESS EXCLUSIVE MODE NOWAIT")
+	_, err := tx.Exec("LOCK TABLE materialiser_log IN ACCESS EXCLUSIVE MODE NOWAIT")
 	if err != nil {
 		return fmt.Errorf("Locking not aquired. Another process is probably already running: %s", err)
 	}
