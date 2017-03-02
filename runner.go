@@ -81,14 +81,14 @@ func (r *Runner) runOnce() error {
 		if err = tx.QueryRow("SELECT COALESCE(MAX(created), TIMESTAMP 'epoch') FROM agg_log WHERE view = $1", view.GetName()).Scan(&lastRun); err != nil {
 			if err != sql.ErrNoRows {
 				r.logger.Printf("Failed to find last run time: %s", err)
-				if rollbackErr := tx.Rollback(); err != nil {
-					r.logger.Printf("Rollback also failed: %s", rollbackErr)
+				if err = tx.Rollback(); err != nil {
+					r.logger.Printf("Rollback also failed: %s", err)
 				}
 				continue
 			}
 		}
 		if time.Since(lastRun) < view.GetUpdateInterval() {
-			if err := tx.Commit(); err != nil {
+			if err := tx.Commit(); rollbackErr != nil {
 				r.logger.Printf("Failed commit empty transaction: %s", err)
 			}
 			continue //nothing to do
@@ -97,8 +97,8 @@ func (r *Runner) runOnce() error {
 		//run view setup
 		if err := view.Setup(tx); err != nil {
 			r.logger.Printf("Setup for %s failed: %s", view.GetName(), err.Error())
-			if rollbackErr := tx.Rollback(); err != nil {
-				r.logger.Printf("Rollback also failed: %s", rollbackErr)
+			if err = tx.Rollback(); err != nil {
+				r.logger.Printf("Rollback also failed: %s", err)
 			}
 			continue
 		}
@@ -106,8 +106,8 @@ func (r *Runner) runOnce() error {
 		//run view update
 		if err := view.Update(tx); err != nil {
 			r.logger.Printf("Update for %s failed: %s", view.GetName(), err.Error())
-			if rollbackErr := tx.Rollback(); err != nil {
-				r.logger.Printf("Rollback also failed: %s", rollbackErr)
+			if err = tx.Rollback(); err != nil {
+				r.logger.Printf("Rollback also failed: %s", err)
 			}
 			continue
 		}
@@ -116,8 +116,8 @@ func (r *Runner) runOnce() error {
 		_, err = tx.Exec("INSERT INTO agg_log (host, view, duration_sec) VALUES ($1, $2, $3)", hostname, view.GetName(), time.Since(started).Seconds())
 		if err != nil {
 			r.logger.Printf("Lock log create failed: %s", err)
-			if rollbackErr := tx.Rollback(); err != nil {
-				r.logger.Printf("Rollback also failed: %s", rollbackErr)
+			if err = tx.Rollback(); err != nil {
+				r.logger.Printf("Rollback also failed: %s", err)
 			}
 			continue
 		}
