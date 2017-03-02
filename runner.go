@@ -88,7 +88,7 @@ func (r *Runner) runOnce() error {
 			}
 		}
 		if time.Since(lastRun) < view.GetUpdateInterval() {
-			if err := tx.Commit(); rollbackErr != nil {
+			if err := tx.Commit(); err != nil {
 				r.logger.Printf("Failed commit empty transaction: %s", err)
 			}
 			continue //nothing to do
