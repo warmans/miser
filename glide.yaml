@@ -1,0 +1,4 @@
+package: github.com/warmans/miser
+import: []
+testImport:
+- package: github.com/lib/pq

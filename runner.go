@@ -16,9 +16,10 @@ type Runner struct {
 	logger *log.Logger
 	conn   *sql.DB
 	views  []View
+	stop   bool
 }
 
-func (r *Runner) setup() error {
+func (r *Runner) Setup() error {
 	_, err := r.conn.Exec(`
 		CREATE TABLE IF NOT EXISTS materialiser_log (
 			id           SERIAL PRIMARY KEY,
@@ -40,7 +41,7 @@ func (r *Runner) Run() {
 			r.logger.Printf("Aggregates failed permanently")
 			return
 		}
-		if err := r.setup(); err != nil {
+		if err := r.Setup(); err != nil {
 			r.logger.Printf("Setup failed (%s). Retrying... ", err.Error())
 			time.Sleep(time.Second * 6)
 			continue
