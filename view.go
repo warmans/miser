@@ -176,7 +176,7 @@ func (v *TimeseriesView) setupTableIndexes(table string, replace bool, tx *sql.T
 				return fmt.Errorf("Index (%s) failed: %s", index, err)
 			}
 		}
-		_, err := tx.Exec(fmt.Sprintf("CREATE INDEX %s ON %s %s", indexName, indexName, table, index))
+		_, err := tx.Exec(fmt.Sprintf("CREATE INDEX %s ON %s %s", indexName, table, index))
 		if err != nil {
 			return fmt.Errorf("Index (%s) failed: %s", index, err)
 		}
