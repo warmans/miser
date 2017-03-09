@@ -99,6 +99,10 @@ func (r *Runner) runOnce() error {
 			continue //nothing to do
 		}
 
+		if replace {
+			r.logger.Printf("Replace triggered for view: %s (old: %s, new: %s)", view.GetName(), lastVersion, view.GetVersion())
+		}
+
 		//run view update
 		if err := view.Update(tx, replace); err != nil {
 			r.logger.Printf("Update for %s failed: %s", view.GetName(), err.Error())
