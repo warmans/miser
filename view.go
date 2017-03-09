@@ -176,7 +176,7 @@ func (v *TimeseriesView) setupTableIndexes(table string, replace bool, tx *sql.T
 				return fmt.Errorf("Index (%s) failed: %s", index, err)
 			}
 		}
-		_, err := tx.Exec(fmt.Sprintf("CREATE INDEX %s ON %s %s", indexName, table, index))
+		_, err := tx.Exec(fmt.Sprintf("CREATE INDEX %s ON %s (%s)", indexName, table, index))
 		if err != nil {
 			return fmt.Errorf("Index (%s) failed: %s", index, err)
 		}
@@ -259,7 +259,7 @@ func (v *SQLView) Update(tx *sql.Tx, replace bool) error {
 	//add the indexes
 	for k, indexSpec := range v.Table.Indexes {
 		indexName := fmt.Sprintf("idx_%s_%d_temp", v.Table.Name, k)
-		indexStmnt := fmt.Sprintf("DROP INDEX IF EXISTS %s; CREATE INDEX %s ON %s %s", indexName, indexName, tempName, indexSpec)
+		indexStmnt := fmt.Sprintf("DROP INDEX IF EXISTS %s; CREATE INDEX %s ON %s (%s)", indexName, indexName, tempName, indexSpec)
 		if _, err := tx.Exec(indexStmnt); err != nil {
 			return fmt.Errorf("create index %d failed: %s (%s)", k, err, indexStmnt)
 		}

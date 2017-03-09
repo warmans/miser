@@ -200,6 +200,9 @@ func TestRunnerIterateE2E(t *testing.T) {
 					{CreateSpec: "val3 DECIMAL", SelectSpec: "SUM(val1::DECIMAL * val2)", IsKey: false},
 				},
 				TrackBy: &DateTracker{SourceDateColumn: "ts", DestinationDateColumn: "ts", Backtrack: time.Hour},
+				Indexes: []string{
+					"ts, key1, key2",
+				},
 			},
 		},
 	)
