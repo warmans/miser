@@ -241,7 +241,7 @@ func (v *SQLView) GetVersion() string {
 	return "na" //no point to versions when it always replaces anyway
 }
 
-func (v *SQLView) Update(tx *sql.Tx) error {
+func (v *SQLView) Update(tx *sql.Tx, replace bool) error {
 
 	//create the temp table
 	tempName := fmt.Sprintf(`%s_temp`, v.Table.Name)
