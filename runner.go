@@ -13,9 +13,9 @@ func NewRunner(logger *log.Logger, conn *sql.DB, views []View) *Runner {
 }
 
 type Runner struct {
-	logger          *log.Logger
-	conn            *sql.DB
-	views           []View
+	logger *log.Logger
+	conn   *sql.DB
+	views  []View
 }
 
 func (r *Runner) Setup() error {
@@ -25,6 +25,7 @@ func (r *Runner) Setup() error {
 			created      TIMESTAMP DEFAULT (NOW() AT TIME ZONE 'utc'),
 			host         TEXT,
 			view         TEXT,
+			version      TEXT,
 			duration_sec DECIMAL
 		)
 	`)
@@ -78,33 +79,28 @@ func (r *Runner) runOnce() error {
 
 		//find last run time for view
 		var lastRun time.Time
-		if err = tx.QueryRow("SELECT COALESCE(MAX(created), TIMESTAMP 'epoch') FROM materialiser_log WHERE view = $1", view.GetName()).Scan(&lastRun); err != nil {
+		var lastVersion string
+		if err = tx.QueryRow("SELECT COALESCE(created, TIMESTAMP 'epoch'), COALESCE(version, '0') FROM materialiser_log WHERE view = $1 ORDER BY id DESC LIMIT 1", view.GetName()).Scan(&lastRun, &lastVersion); err != nil {
 			if err != sql.ErrNoRows {
-				r.logger.Printf("Failed to find last run time: %s", err)
-				if err = tx.Rollback(); err != nil {
-					r.logger.Printf("Rollback also failed: %s", err)
+				if rollbackErr := tx.Rollback(); rollbackErr != nil {
+					return fmt.Errorf("roll back failed with %s. original error: %s", rollbackErr, err)
 				}
-				continue
+				return err
 			}
 		}
-		if time.Since(lastRun) < view.GetUpdateInterval() {
+
+		//if the last version id different from the current one the view must be replaced
+		replace := lastVersion != view.GetVersion()
+
+		if !replace && time.Since(lastRun) < view.GetUpdateInterval() {
 			if err := tx.Commit(); err != nil {
 				r.logger.Printf("Failed commit empty transaction: %s", err)
 			}
 			continue //nothing to do
 		}
 
-		//run view setup
-		if err := view.Setup(tx); err != nil {
-			r.logger.Printf("Setup for %s failed: %s", view.GetName(), err.Error())
-			if err = tx.Rollback(); err != nil {
-				r.logger.Printf("Rollback also failed: %s", err)
-			}
-			continue
-		}
-
 		//run view update
-		if err := view.Update(tx); err != nil {
+		if err := view.Update(tx, replace); err != nil {
 			r.logger.Printf("Update for %s failed: %s", view.GetName(), err.Error())
 			if err = tx.Rollback(); err != nil {
 				r.logger.Printf("Rollback also failed: %s", err)
@@ -113,7 +109,7 @@ func (r *Runner) runOnce() error {
 		}
 
 		//log completion stats
-		_, err = tx.Exec("INSERT INTO materialiser_log (host, view, duration_sec) VALUES ($1, $2, $3)", hostname, view.GetName(), time.Since(started).Seconds())
+		_, err = tx.Exec("INSERT INTO materialiser_log (host, view, version, duration_sec) VALUES ($1, $2, $3, $4)", hostname, view.GetName(), view.GetVersion(), time.Since(started).Seconds())
 		if err != nil {
 			r.logger.Printf("Lock log create failed: %s", err)
 			if err = tx.Rollback(); err != nil {

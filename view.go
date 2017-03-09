@@ -1,6 +1,7 @@
 package miser
 
 import (
+	"crypto/md5"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -49,9 +50,9 @@ func (t *DateTracker) GetOffsets(destinationTableName string, tx *sql.Tx) (*Offs
 
 type View interface {
 	GetName() string
-	Setup(tx *sql.Tx) error
-	Update(tx *sql.Tx) error
+	GetVersion() (string)
 	GetUpdateInterval() time.Duration
+	Update(tx *sql.Tx, replace bool) error
 }
 
 type StandardViewColumn struct {
@@ -74,21 +75,108 @@ func (v *TimeseriesView) GetName() string {
 	return v.Name
 }
 
+func (v *TimeseriesView) GetVersion() string {
+	//offsets and table names intentionally blank
+	viewDefinition := strings.Replace(v.getCreateTableSQL("") + v.getInsertSQL("", &Offsets{}), " ", "", -1)
+	return fmt.Sprintf("%x", md5.Sum([]byte(viewDefinition)))
+}
+
 func (v *TimeseriesView) GetUpdateInterval() time.Duration {
 	return v.UpdateInterval
 }
 
-func (v *TimeseriesView) Setup(tx *sql.Tx) error {
+func (v *TimeseriesView) Update(tx *sql.Tx, replace bool) error {
 
-	//setup table
-	_, err := tx.Exec(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (%s)`, v.Name, strings.Join(v.getCreateColumns(), ", ")))
-	if err != nil {
-		return fmt.Errorf("Create failed: %s", err)
+	var targetTable string
+	if replace {
+		targetTable = v.Name + "_temp"
+	} else {
+		targetTable = v.Name
 	}
 
-	//pass though index SQL directly
-	for _, index := range v.Indexes {
-		_, err := tx.Exec(index)
+	if err := v.setupTable(targetTable, tx); err != nil {
+		return fmt.Errorf("failed to create table: %s", err)
+	}
+
+	if !replace {
+		if err := v.setupTableIndexes(targetTable, replace, tx); err != nil {
+			return fmt.Errorf("failed to create index: %s", err)
+		}
+	}
+
+	if err :=  v.updateTable(targetTable, tx); err != nil {
+		return fmt.Errorf("failed to update table: %s", err)
+	}
+
+	if !replace {
+		return nil //nothing more to do
+	}
+
+	//this is a replace so we need to finish up by moving the new table into place
+
+	//remove old table
+	dropStmnt := fmt.Sprintf("DROP TABLE IF EXISTS %s", v.Name)
+	if _, err := tx.Exec(dropStmnt); err != nil {
+		return fmt.Errorf("drop temp table failed: %s (%s)", err, dropStmnt)
+	}
+
+	//replace table
+	alterTableStmnt := fmt.Sprintf("ALTER TABLE %s RENAME TO %s", targetTable, v.Name)
+	if _, err := tx.Exec(alterTableStmnt); err != nil {
+		return fmt.Errorf("rename temp table failed: %s (%s)", err, alterTableStmnt)
+	}
+
+	//create indexes (indexes do not move with a rename so they have to be created last)
+	if err := v.setupTableIndexes(v.Name, replace, tx); err != nil {
+		return fmt.Errorf("failed to create index: %s", err)
+	}
+
+	return nil
+}
+
+func (v *TimeseriesView) updateTable(table string, tx *sql.Tx) error {
+
+	offsets, err := v.TrackBy.GetOffsets(table, tx)
+	if err != nil {
+		return err
+	}
+
+	deleteSQL := fmt.Sprintf("DELETE FROM %s WHERE %s", table, offsets.DestinationOffsetSQL)
+	_, err = tx.Exec(deleteSQL)
+	if err != nil {
+		return err
+	}
+
+	if _, err = tx.Exec(v.getInsertSQL(table, offsets)); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+
+func (v *TimeseriesView) setupTable(table string, tx *sql.Tx) error {
+
+	//setup table
+	_, err := tx.Exec(v.getCreateTableSQL(table))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (v *TimeseriesView) setupTableIndexes(table string, replace bool, tx *sql.Tx) error {
+	//pass though index create SQL directly
+	for k, index := range v.Indexes {
+		indexName := fmt.Sprintf("%s_%d_idx", table, k)
+		if replace {
+			_, err := tx.Exec(fmt.Sprintf("DROP INDEX IF EXISTS %s; ", indexName))
+			if err != nil {
+				return fmt.Errorf("Index (%s) failed: %s", index, err)
+			}
+		}
+		_, err := tx.Exec(fmt.Sprintf("CREATE INDEX %s ON %s %s", indexName, indexName, table, index))
 		if err != nil {
 			return fmt.Errorf("Index (%s) failed: %s", index, err)
 		}
@@ -96,32 +184,19 @@ func (v *TimeseriesView) Setup(tx *sql.Tx) error {
 	return nil
 }
 
-func (v *TimeseriesView) Update(tx *sql.Tx) error {
-
-	offsets, err := v.TrackBy.GetOffsets(v.Name, tx)
-	if err != nil {
-		return err
-	}
-
-	deleteSQL := fmt.Sprintf("DELETE FROM %s WHERE %s", v.Name, offsets.DestinationOffsetSQL)
-	_, err = tx.Exec(deleteSQL)
-	if err != nil {
-		return err
-	}
-
-	updateSQL := fmt.Sprintf(
+func (v *TimeseriesView) getInsertSQL(table string, offsets *Offsets) string {
+	return fmt.Sprintf(
 		"INSERT INTO %s SELECT %s FROM %s WHERE %s GROUP BY %s",
-		v.Name,
+		table,
 		strings.Join(v.getSelectColumns(), ", "),
 		v.SourceTableName,
 		offsets.SourceOffsetSQL,
 		strings.Join(v.getGroupColumns(), ", "),
 	)
-	_, err = tx.Exec(updateSQL)
-	if err != nil {
-		return err
-	}
-	return nil
+}
+
+func (v *TimeseriesView) getCreateTableSQL(table string) string {
+	return fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (%s)`, table, strings.Join(v.getCreateColumns(), ", "))
 }
 
 func (v *TimeseriesView) getCreateColumns() []string {
@@ -162,8 +237,8 @@ func (v *SQLView) GetName() string {
 	return v.Table.Name
 }
 
-func (v *SQLView) Setup(tx *sql.Tx) error {
-	return nil
+func (v *SQLView) GetVersion() string {
+	return "na" //no point to versions when it always replaces anyway
 }
 
 func (v *SQLView) Update(tx *sql.Tx) error {
@@ -208,7 +283,7 @@ func (v *SQLView) Update(tx *sql.Tx) error {
 		return fmt.Errorf("rename table failed: %s (%s)", err, alterTableStmnt)
 	}
 
-	//replace indxes
+	//replace indexes
 	for k := range v.Table.Indexes {
 		indexName := fmt.Sprintf("idx_%s_%d", v.Table.Name, k)
 		alterIndexStmnt := fmt.Sprintf("DROP INDEX IF EXISTS %s; ALTER INDEX %s_temp RENAME TO %s", indexName, indexName, indexName)
@@ -216,6 +291,7 @@ func (v *SQLView) Update(tx *sql.Tx) error {
 			return fmt.Errorf("rename table failed: %s (%s)", err, alterIndexStmnt)
 		}
 	}
+
 	return nil
 }
 

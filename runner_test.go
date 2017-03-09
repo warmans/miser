@@ -3,7 +3,6 @@ package miser
 import (
 	"database/sql"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"math/rand"
 	"os"
@@ -108,7 +107,7 @@ func mustGetRowCount(t *testing.T, conn *sql.DB, table string) int64 {
 	return num
 }
 
-func TestRunnerE2E(t *testing.T) {
+func TestRunnerCleanE2E(t *testing.T) {
 
 	if os.Getenv("E2E") == "" {
 		t.Skip("e2e tests not enabled")
@@ -116,8 +115,18 @@ func TestRunnerE2E(t *testing.T) {
 	}
 	conn := mustSetupTest(t)
 
+	if _, err := conn.Exec(`DROP TABLE IF EXISTS test_view_1`); err != nil {
+		t.Fatalf("failed test cleanup: %s", err.Error())
+		return
+	}
+
+	if _, err := conn.Exec(`DROP TABLE IF EXISTS materialiser_log`); err != nil {
+		t.Fatalf("failed test cleanup: %s", err.Error())
+		return
+	}
+
 	runner := NewRunner(
-		log.New(ioutil.Discard, "", log.LstdFlags),
+		log.New(os.Stderr, "", log.LstdFlags),
 		conn,
 		[]View{
 			&TimeseriesView{
@@ -161,5 +170,66 @@ func TestRunnerE2E(t *testing.T) {
 	if baseTableVal1Sum != aggTableVal1Sum {
 		t.Errorf("val1 should have the same sum in base and aggregate tables. Actually base was %d and aggregate was %d", baseTableVal1Sum, aggTableVal1Sum)
 		return
+	}
+}
+
+func TestRunnerIterateE2E(t *testing.T) {
+
+	if os.Getenv("E2E") == "" {
+		t.Skip("e2e tests not enabled")
+		return
+	}
+	conn := mustSetupTest(t)
+
+	runner := NewRunner(
+		log.New(os.Stderr, "", log.LstdFlags),
+		conn,
+		[]View{
+			&TimeseriesView{
+				Name: "test_view_2",
+				SourceTableName: "test_data_1",
+				UpdateInterval: time.Millisecond,
+				Columns: []*StandardViewColumn{
+					{CreateSpec: "ts TEXT", SelectSpec: "date_trunc('hour', ts)", IsKey: true},
+					{CreateSpec: "key1 TEXT", SelectSpec: "key1", IsKey: true},
+					{CreateSpec: "key2 TEXT", SelectSpec: "key2", IsKey: true},
+					//omit 1 key col
+					{CreateSpec: "val1 INTEGER", SelectSpec: "SUM(val1)", IsKey: false},
+					{CreateSpec: "val2 DECIMAL", SelectSpec: "SUM(val2)", IsKey: false},
+					//add one value col
+					{CreateSpec: "val3 DECIMAL", SelectSpec: "SUM(val1::DECIMAL * val2)", IsKey: false},
+				},
+				TrackBy: &DateTracker{SourceDateColumn: "ts", DestinationDateColumn: "ts", Backtrack: time.Hour},
+			},
+		},
+	)
+
+	if err := runner.Setup(); err != nil {
+		t.Errorf("Runner setup failed: %s", err)
+		return
+	}
+
+	for i:=0; i< 10; i++ {
+
+		if err := runner.runOnce(); err != nil {
+			t.Errorf("Runner failed with error: %s", err)
+			return
+		}
+
+		//with random values cannot know if any aggregation happened
+		t.Logf(
+			"view created with %d rows (vs original %d rows)",
+			mustGetRowCount(t, conn, "test_view_2"),
+			mustGetRowCount(t, conn, "test_data_1"),
+		)
+
+		aggTableVal1Sum := mustGetColumnSum(t, conn, "test_view_2", "val1")
+		baseTableVal1Sum := mustGetColumnSum(t, conn, "test_data_1", "val1")
+		if baseTableVal1Sum != aggTableVal1Sum {
+			t.Errorf("val1 should have the same sum in base and aggregate tables. Actually base was %d and aggregate was %d", baseTableVal1Sum, aggTableVal1Sum)
+			return
+		}
+
+		time.Sleep(time.Millisecond * 5)
 	}
 }
