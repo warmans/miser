@@ -77,7 +77,7 @@ func (v *TimeseriesView) GetName() string {
 
 func (v *TimeseriesView) GetVersion() string {
 	//offsets and table names intentionally blank
-	viewDefinition := strings.Replace(v.getCreateTableSQL("") + v.getInsertSQL("", &Offsets{}), " ", "", -1)
+	viewDefinition := strings.Replace(v.getCreateTableSQL("")+v.getInsertSQL("", &Offsets{}), " ", "", -1)
 	return fmt.Sprintf("%x", md5.Sum([]byte(viewDefinition)))
 }
 
@@ -104,7 +104,7 @@ func (v *TimeseriesView) Update(tx *sql.Tx, replace bool) error {
 		}
 	}
 
-	if err :=  v.updateTable(targetTable, tx); err != nil {
+	if err := v.updateTable(targetTable, tx); err != nil {
 		return fmt.Errorf("failed to update table: %s", err)
 	}
 
@@ -153,7 +153,6 @@ func (v *TimeseriesView) updateTable(table string, tx *sql.Tx) error {
 
 	return nil
 }
-
 
 func (v *TimeseriesView) setupTable(table string, tx *sql.Tx) error {
 
@@ -231,6 +230,7 @@ type SQLView struct {
 	Table          *TableSpec
 	DataSelectSQL  string
 	UpdateInterval time.Duration
+	Version        string
 }
 
 func (v *SQLView) GetName() string {
@@ -238,7 +238,7 @@ func (v *SQLView) GetName() string {
 }
 
 func (v *SQLView) GetVersion() string {
-	return "na" //no point to versions when it always replaces anyway
+	return v.Version //no point to versions when it always replaces anyway
 }
 
 func (v *SQLView) Update(tx *sql.Tx, replace bool) error {
