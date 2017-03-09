@@ -13,10 +13,9 @@ func NewRunner(logger *log.Logger, conn *sql.DB, views []View) *Runner {
 }
 
 type Runner struct {
-	logger *log.Logger
-	conn   *sql.DB
-	views  []View
-	stop   bool
+	logger          *log.Logger
+	conn            *sql.DB
+	views           []View
 }
 
 func (r *Runner) Setup() error {

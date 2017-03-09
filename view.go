@@ -62,12 +62,12 @@ type StandardViewColumn struct {
 
 //TimeseriesView represents the materialised view capable of doing incremental updates
 type TimeseriesView struct {
-	Name                string
-	SourceTableName     string
-	UpdateInterval      time.Duration
-	Columns             []*StandardViewColumn
-	Indexes             []string
-	TrackBy             Tracker
+	Name            string
+	SourceTableName string
+	UpdateInterval  time.Duration
+	Columns         []*StandardViewColumn
+	Indexes         []string
+	TrackBy         Tracker
 }
 
 func (v *TimeseriesView) GetName() string {
