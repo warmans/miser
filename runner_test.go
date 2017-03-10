@@ -10,6 +10,7 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+	"encoding/json"
 )
 
 var words = []string{"foo", "bar", "baz"}
@@ -134,7 +135,7 @@ func TestRunnerCleanE2E(t *testing.T) {
 				SourceTableName: "test_data_1",
 				UpdateInterval: time.Minute,
 				Columns: []*StandardViewColumn{
-					{CreateSpec: "ts TEXT", SelectSpec: "date_trunc('hour', ts)", IsKey: true},
+					{CreateSpec: "ts TIMESTAMP", SelectSpec: "date_trunc('hour', ts)", IsKey: true},
 					{CreateSpec: "key1 TEXT", SelectSpec: "key1", IsKey: true},
 					{CreateSpec: "key2 TEXT", SelectSpec: "key2", IsKey: true},
 					//omit 1 key col
@@ -171,6 +172,9 @@ func TestRunnerCleanE2E(t *testing.T) {
 		t.Errorf("val1 should have the same sum in base and aggregate tables. Actually base was %d and aggregate was %d", baseTableVal1Sum, aggTableVal1Sum)
 		return
 	}
+
+	t.Logf("Dumping stats...")
+	json.NewEncoder(os.Stdout).Encode(runner.GetStats())
 }
 
 func TestRunnerIterateE2E(t *testing.T) {
@@ -190,7 +194,7 @@ func TestRunnerIterateE2E(t *testing.T) {
 				SourceTableName: "test_data_1",
 				UpdateInterval: time.Millisecond,
 				Columns: []*StandardViewColumn{
-					{CreateSpec: "ts TEXT", SelectSpec: "date_trunc('hour', ts)", IsKey: true},
+					{CreateSpec: "ts TIMESTAMP", SelectSpec: "date_trunc('hour', ts)", IsKey: true},
 					{CreateSpec: "key1 TEXT", SelectSpec: "key1", IsKey: true},
 					{CreateSpec: "key2 TEXT", SelectSpec: "key2", IsKey: true},
 					//omit 1 key col
@@ -235,4 +239,7 @@ func TestRunnerIterateE2E(t *testing.T) {
 
 		time.Sleep(time.Millisecond * 5)
 	}
+
+	t.Logf("Dumping stats...")
+	json.NewEncoder(os.Stdout).Encode(runner.GetStats())
 }

@@ -9,13 +9,14 @@ import (
 )
 
 func NewRunner(logger *log.Logger, conn *sql.DB, views []View) *Runner {
-	return &Runner{logger: logger, conn: conn, views: views}
+	return &Runner{logger: logger, conn: conn, views: views, stats: &RunnerStats{Views: make([]ViewStats, 0)}}
 }
 
 type Runner struct {
 	logger *log.Logger
 	conn   *sql.DB
 	views  []View
+	stats  *RunnerStats
 }
 
 func (r *Runner) Setup() error {
@@ -71,20 +72,25 @@ func (r *Runner) Run() {
 
 func (r *Runner) runOnce() error {
 
-	started := time.Now()
+	runStartTime := time.Now()
 
 	hostname, err := os.Hostname()
 	if err != nil {
 		return err
 	}
 
+	viewStats := []ViewStats{}
+
 	for _, view := range r.views {
+
+		started := time.Now()
 
 		tx, err := r.conn.Begin()
 		if err != nil {
 			return err
 		}
 		if err := r.Lock(tx); err != nil {
+			r.stats.LockFailures++
 			return err
 		}
 
@@ -112,6 +118,7 @@ func (r *Runner) runOnce() error {
 
 		if replace {
 			r.logger.Printf("Replace triggered for view: %s (old: %s, new: %s)", view.GetName(), lastVersion, view.GetVersion())
+			r.stats.TableReplacements++
 		}
 
 		//run view update
@@ -133,11 +140,28 @@ func (r *Runner) runOnce() error {
 			continue
 		}
 
+		//check the final size of the table
+		var viewRowCount int64
+		if err := tx.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", view.GetName())).Scan(&viewRowCount); err != nil {
+			r.logger.Printf("Table Count: %s", err)
+			if err = tx.Rollback(); err != nil {
+				r.logger.Printf("Rollback also failed: %s", err)
+			}
+			continue
+		}
+
 		//everything worked... try and commit the changes
 		if err := tx.Commit(); err != nil {
 			r.logger.Printf("Commit failed: %s", err)
+			continue
 		}
+
+		//add the stats
+		viewStats = append(viewStats, ViewStats{Name: view.GetName(), TableRowsTotal: viewRowCount, LastUpdateSeconds: time.Since(started).Seconds()})
 	}
+
+	r.stats.Views = viewStats
+	r.stats.LastRunSeconds = time.Since(runStartTime).Seconds()
 
 	return nil
 }
@@ -148,4 +172,21 @@ func (r *Runner) Lock(tx *sql.Tx) error {
 		return fmt.Errorf("Locking not aquired. Another process is probably already running: %s", err)
 	}
 	return err
+}
+
+func (r *Runner) GetStats() RunnerStats {
+	return *r.stats
+}
+
+type RunnerStats struct {
+	LastRunSeconds    float64      `json:"last_run_seconds"`
+	LockFailures      int64        `json:"lock_failures"`
+	TableReplacements int64        `json:"table_replacements"`
+	Views             []ViewStats  `json:"view_stats"`
+}
+
+type ViewStats struct {
+	Name              string  `json:"name"`
+	TableRowsTotal    int64   `json:"table_rows_total"`
+	LastUpdateSeconds float64 `json:"last_update_seconds"`
 }
