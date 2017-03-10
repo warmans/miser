@@ -19,6 +19,7 @@ type Runner struct {
 }
 
 func (r *Runner) Setup() error {
+
 	_, err := r.conn.Exec(`
 		CREATE TABLE IF NOT EXISTS materialiser_log (
 			id           SERIAL PRIMARY KEY,
@@ -29,7 +30,17 @@ func (r *Runner) Setup() error {
 			duration_sec DECIMAL
 		)
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	//setup initial empty views as soon as possible
+	for _, v := range r.views {
+		if err := v.Create(r.conn); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Runner) Run() {

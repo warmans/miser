@@ -52,6 +52,7 @@ type View interface {
 	GetName() string
 	GetVersion() (string)
 	GetUpdateInterval() time.Duration
+	Create(conn *sql.DB) error
 	Update(tx *sql.Tx, replace bool) error
 }
 
@@ -83,6 +84,20 @@ func (v *TimeseriesView) GetVersion() string {
 
 func (v *TimeseriesView) GetUpdateInterval() time.Duration {
 	return v.UpdateInterval
+}
+
+
+// tables are always re-created in Updated if necessary but this method is used to minimize period where no table exists (i.e. don't wait
+// for aggregate tx to complete)
+func (v *TimeseriesView) Create(conn *sql.DB) error {
+	tx , err := conn.Begin()
+	if err != nil {
+		return err
+	}
+	if err := v.setupTable(v.Name, tx); err != nil {
+		return fmt.Errorf("failed to create table: %s", err)
+	}
+	return tx.Commit()
 }
 
 func (v *TimeseriesView) Update(tx *sql.Tx, replace bool) error {
@@ -239,6 +254,18 @@ func (v *SQLView) GetName() string {
 
 func (v *SQLView) GetVersion() string {
 	return v.Version //no point to versions when it always replaces anyway
+}
+
+func (v *SQLView) Create(conn *sql.DB) error {
+	tx , err := conn.Begin()
+	if err != nil {
+		return err
+	}
+	createStmnt := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s %s", v.Table.Name, v.Table.Spec)
+	if _, err := tx.Exec(createStmnt); err != nil {
+		return fmt.Errorf("create table failed: %s (%s)", err, createStmnt)
+	}
+	return tx.Commit()
 }
 
 func (v *SQLView) Update(tx *sql.Tx, replace bool) error {
