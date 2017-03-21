@@ -19,6 +19,15 @@ type Runner struct {
 	stats  *RunnerStats
 }
 
+type Metadata struct {
+	ID          int64
+	Created     time.Time
+	Host        string
+	View        string
+	Version     string
+	DurationSec float64
+}
+
 func (r *Runner) Setup() error {
 
 	_, err := r.conn.Exec(`
@@ -94,22 +103,18 @@ func (r *Runner) runOnce() error {
 			return err
 		}
 
-		//find last run time for view
-		var lastRun time.Time
-		var lastVersion string
-		if err = tx.QueryRow("SELECT COALESCE(created, TIMESTAMP 'epoch'), COALESCE(version, '0') FROM materialiser_log WHERE view = $1 ORDER BY id DESC LIMIT 1", view.GetName()).Scan(&lastRun, &lastVersion); err != nil {
-			if err != sql.ErrNoRows {
-				if rollbackErr := tx.Rollback(); rollbackErr != nil {
-					return fmt.Errorf("roll back failed with %s. original error: %s", rollbackErr, err)
-				}
-				return err
+		metadata, err := GetLastUpdateMeta(view.GetName(), tx)
+		if err != nil && err != sql.ErrNoRows {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil {
+				return fmt.Errorf("roll back failed with %s. original error: %s", rollbackErr, err)
 			}
+			return err
 		}
 
 		//if the last version id different from the current one the view must be replaced
-		replace := lastVersion != view.GetVersion()
+		replace := metadata.Version != view.GetVersion()
 
-		if !replace && time.Since(lastRun) < view.GetUpdateInterval() {
+		if !replace && time.Since(metadata.Created) < view.GetUpdateInterval() {
 			if err := tx.Commit(); err != nil {
 				r.logger.Printf("Failed commit empty transaction: %s", err)
 			}
@@ -117,7 +122,7 @@ func (r *Runner) runOnce() error {
 		}
 
 		if replace {
-			r.logger.Printf("Replace triggered for view: %s (old: %s, new: %s)", view.GetName(), lastVersion, view.GetVersion())
+			r.logger.Printf("Replace triggered for view: %s (old: %s, new: %s)", view.GetName(), metadata.Version, view.GetVersion())
 			r.stats.TableReplacements++
 		}
 

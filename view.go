@@ -11,7 +11,7 @@ import (
 // Tracker defines how to get the offsets for the source/dest tables. I.e. you need to know where to start reading in the
 // source table based on the last record in dest.
 type Tracker interface {
-	GetOffsets(destinationTableName string, tx *sql.Tx) (*Offsets, error)
+	GetOffsets(destinationTableName string, view View, tx *sql.Tx) (*Offsets, error)
 }
 
 // Offsets are sql snippets used in update queries
@@ -27,14 +27,13 @@ type DateTracker struct {
 	Backtrack             time.Duration
 }
 
-func (t *DateTracker) GetOffsets(destinationTableName string, tx *sql.Tx) (*Offsets, error) {
+func (t *DateTracker) GetOffsets(destinationTableName string, view View, tx *sql.Tx) (*Offsets, error) {
 	lastRowTime := time.Time{}
 	err := tx.QueryRow(fmt.Sprintf("SELECT %s FROM %s ORDER BY %s DESC LIMIT 1", t.DestinationDateColumn, destinationTableName, t.DestinationDateColumn)).Scan(&lastRowTime)
-	if err != nil {
-		if err != sql.ErrNoRows {
-			return nil, err
-		}
+	if err != nil && err != sql.ErrNoRows {
+		return nil, err
 	}
+
 	//if a last value was not found don't backtrack at all
 	backtrackedTime := lastRowTime
 	if !lastRowTime.IsZero() {
@@ -46,6 +45,16 @@ func (t *DateTracker) GetOffsets(destinationTableName string, tx *sql.Tx) (*Offs
 		DestinationOffsetSQL: fmt.Sprintf("%s >= '%s'", t.DestinationDateColumn, backtrackedTime.Format(time.RFC3339)),
 	}
 	return off, nil
+}
+
+func GetLastUpdateMeta(viewName string, tx *sql.Tx) (*Metadata, error) {
+	metadata := &Metadata{}
+	if err := tx.
+	QueryRow("SELECT id, COALESCE(created, TIMESTAMP 'epoch'), host, view, COALESCE(version, '0'), duration_sec FROM materialiser_log WHERE view = $1 ORDER BY id DESC LIMIT 1",viewName).
+		Scan(&metadata.ID, &metadata.Created, &metadata.Host, &metadata.View, &metadata.Version, &metadata.DurationSec); err != nil {
+		return metadata, err
+	}
+	return metadata, nil
 }
 
 type View interface {
@@ -86,11 +95,10 @@ func (v *TimeseriesView) GetUpdateInterval() time.Duration {
 	return v.UpdateInterval
 }
 
-
 // tables are always re-created in Updated if necessary but this method is used to minimize period where no table exists (i.e. don't wait
 // for aggregate tx to complete)
 func (v *TimeseriesView) Create(conn *sql.DB) error {
-	tx , err := conn.Begin()
+	tx, err := conn.Begin()
 	if err != nil {
 		return err
 	}
@@ -151,7 +159,7 @@ func (v *TimeseriesView) Update(tx *sql.Tx, replace bool) error {
 
 func (v *TimeseriesView) updateTable(table string, tx *sql.Tx) error {
 
-	offsets, err := v.TrackBy.GetOffsets(table, tx)
+	offsets, err := v.TrackBy.GetOffsets(table, v, tx)
 	if err != nil {
 		return err
 	}
@@ -257,7 +265,7 @@ func (v *SQLView) GetVersion() string {
 }
 
 func (v *SQLView) Create(conn *sql.DB) error {
-	tx , err := conn.Begin()
+	tx, err := conn.Begin()
 	if err != nil {
 		return err
 	}
