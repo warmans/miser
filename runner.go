@@ -116,9 +116,12 @@ func (r *Runner) runOnce() error {
 		}
 
 		//if the last version id different from the current one the view must be replaced
+		timeSinceLastUpdate := time.Since(metadata.Created)
 		replace := metadata.Version != view.GetVersion()
 
-		if !replace && time.Since(metadata.Created) < view.GetUpdateInterval() {
+		log.Debugf("%s %v minutes since last update (interval is %d)", view.GetName(), timeSinceLastUpdate.Minutes(), view.GetUpdateInterval().Minutes())
+
+		if !replace && timeSinceLastUpdate  < view.GetUpdateInterval() {
 			if err := tx.Commit(); err != nil {
 				log.Logf("Failed commit empty transaction: %s", err)
 			}
