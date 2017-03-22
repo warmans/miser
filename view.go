@@ -50,7 +50,7 @@ func (t *DateTracker) GetOffsets(destinationTableName string, view View, tx *sql
 func GetLastUpdateMeta(viewName string, tx *sql.Tx) (*Metadata, error) {
 	metadata := &Metadata{}
 	if err := tx.
-	QueryRow("SELECT id, COALESCE(created, TIMESTAMP 'epoch'), host, view, COALESCE(version, '0'), duration_sec FROM materialiser_log WHERE view = $1 ORDER BY id DESC LIMIT 1",viewName).
+	QueryRow("SELECT id, COALESCE(created, TIMESTAMP 'epoch'), host, view, COALESCE(version, '0'), duration_sec FROM materialiser_log WHERE view = $1 ORDER BY id DESC LIMIT 1", viewName).
 		Scan(&metadata.ID, &metadata.Created, &metadata.Host, &metadata.View, &metadata.Version, &metadata.DurationSec); err != nil {
 		return metadata, err
 	}
@@ -98,6 +98,7 @@ func (v *TimeseriesView) GetUpdateInterval() time.Duration {
 // tables are always re-created in Updated if necessary but this method is used to minimize period where no table exists (i.e. don't wait
 // for aggregate tx to complete)
 func (v *TimeseriesView) Create(conn *sql.DB) error {
+	log.Debugf("creating view %s", v.GetName())
 	tx, err := conn.Begin()
 	if err != nil {
 		return err
@@ -132,18 +133,19 @@ func (v *TimeseriesView) Update(tx *sql.Tx, replace bool) error {
 	}
 
 	if !replace {
+		log.Debugf("%s done", v.GetName())
 		return nil //nothing more to do
 	}
 
 	//this is a replace so we need to finish up by moving the new table into place
 
-	//remove old table
+	log.Debugf("%s remove old table %s", v.GetName(), v.Name)
 	dropStmnt := fmt.Sprintf("DROP TABLE IF EXISTS %s", v.Name)
 	if _, err := tx.Exec(dropStmnt); err != nil {
 		return fmt.Errorf("drop temp table failed: %s (%s)", err, dropStmnt)
 	}
 
-	//replace table
+	log.Debugf("%s move new table into place (%s -> %s)", v.GetName(), targetTable, v.Name)
 	alterTableStmnt := fmt.Sprintf("ALTER TABLE %s RENAME TO %s", targetTable, v.Name)
 	if _, err := tx.Exec(alterTableStmnt); err != nil {
 		return fmt.Errorf("rename temp table failed: %s (%s)", err, alterTableStmnt)
@@ -154,23 +156,29 @@ func (v *TimeseriesView) Update(tx *sql.Tx, replace bool) error {
 		return fmt.Errorf("failed to create index: %s", err)
 	}
 
+	log.Debugf("%s done", v.GetName())
 	return nil
 }
 
 func (v *TimeseriesView) updateTable(table string, tx *sql.Tx) error {
+
+	log.Debugf("%s update table %s", v.GetName(), table)
 
 	offsets, err := v.TrackBy.GetOffsets(table, v, tx)
 	if err != nil {
 		return err
 	}
 
+	log.Debugf("%s delete from %s where %s", v.GetName(), table, offsets.DestinationOffsetSQL)
 	deleteSQL := fmt.Sprintf("DELETE FROM %s WHERE %s", table, offsets.DestinationOffsetSQL)
 	_, err = tx.Exec(deleteSQL)
 	if err != nil {
 		return err
 	}
 
-	if _, err = tx.Exec(v.getInsertSQL(table, offsets)); err != nil {
+	insertSQL := v.getInsertSQL(table, offsets)
+	log.Debugf("%s execute inserts: %s", v.GetName(), insertSQL)
+	if _, err = tx.Exec(insertSQL); err != nil {
 		return err
 	}
 
@@ -178,6 +186,8 @@ func (v *TimeseriesView) updateTable(table string, tx *sql.Tx) error {
 }
 
 func (v *TimeseriesView) setupTable(table string, tx *sql.Tx) error {
+
+	log.Debugf("%s setup table %s", v.GetName(), table)
 
 	//setup table
 	_, err := tx.Exec(v.getCreateTableSQL(table))
@@ -189,6 +199,9 @@ func (v *TimeseriesView) setupTable(table string, tx *sql.Tx) error {
 }
 
 func (v *TimeseriesView) setupTableIndexes(table string, replace bool, tx *sql.Tx) error {
+
+	log.Debugf("%s setup indexes for table %s (replace %v)", v.GetName(), table, replace)
+
 	//pass though index create SQL directly
 	for k, index := range v.Indexes {
 		indexName := fmt.Sprintf("%s_%d_idx", table, k)

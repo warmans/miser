@@ -2,15 +2,14 @@ package miser
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
-	"log"
 	"math/rand"
 	"os"
 	"testing"
 	"time"
 
 	_ "github.com/lib/pq"
-	"encoding/json"
 )
 
 var words = []string{"foo", "bar", "baz"}
@@ -127,7 +126,6 @@ func TestRunnerCleanE2E(t *testing.T) {
 	}
 
 	runner := NewRunner(
-		log.New(os.Stderr, "", log.LstdFlags),
 		conn,
 		[]View{
 			&TimeseriesView{
@@ -186,7 +184,6 @@ func TestRunnerIterateE2E(t *testing.T) {
 	conn := mustSetupTest(t)
 
 	runner := NewRunner(
-		log.New(os.Stderr, "", log.LstdFlags),
 		conn,
 		[]View{
 			&TimeseriesView{

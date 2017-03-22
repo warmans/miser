@@ -3,20 +3,24 @@ package miser
 import (
 	"database/sql"
 	"fmt"
-	"log"
 	"os"
 	"time"
 )
 
-func NewRunner(logger *log.Logger, conn *sql.DB, views []View) *Runner {
-	return &Runner{logger: logger, conn: conn, views: views, stats: &RunnerStats{Views: make([]ViewStats, 0)}}
+var log LogReceiver = &NoopLogReceiver{}
+
+func ReceiveLogs(receiver LogReceiver) {
+	log = receiver
+}
+
+func NewRunner(conn *sql.DB, views []View) *Runner {
+	return &Runner{conn: conn, views: views, stats: &RunnerStats{Views: make([]ViewStats, 0)}}
 }
 
 type Runner struct {
-	logger *log.Logger
-	conn   *sql.DB
-	views  []View
-	stats  *RunnerStats
+	conn  *sql.DB
+	views []View
+	stats *RunnerStats
 }
 
 type Metadata struct {
@@ -59,21 +63,21 @@ func (r *Runner) Run() {
 	for {
 		retries--
 		if retries <= 0 {
-			r.logger.Printf("Aggregates failed permanently")
+			log.Logf("Aggregates failed permanently")
 			return
 		}
 		if err := r.Setup(); err != nil {
-			r.logger.Printf("Setup failed (%s). Retrying... ", err.Error())
+			log.Logf("Setup failed (%s). Retrying... ", err.Error())
 			time.Sleep(time.Second * 6)
 			continue
 		}
-		r.logger.Printf("Setup success\n")
+		log.Logf("Setup success")
 		break //success
 	}
 
 	for {
 		if err := r.runOnce(); err != nil {
-			r.logger.Printf("runner encountered error: %s", err.Error())
+			log.Logf("runner encountered error: %s", err.Error())
 		}
 		time.Sleep(time.Minute)
 	}
@@ -93,6 +97,7 @@ func (r *Runner) runOnce() error {
 	for _, view := range r.views {
 
 		started := time.Now()
+		log.Debugf("started view %s at %s", view.GetName(), started.Format(time.RFC3339))
 
 		tx, err := r.conn.Begin()
 		if err != nil {
@@ -116,21 +121,21 @@ func (r *Runner) runOnce() error {
 
 		if !replace && time.Since(metadata.Created) < view.GetUpdateInterval() {
 			if err := tx.Commit(); err != nil {
-				r.logger.Printf("Failed commit empty transaction: %s", err)
+				log.Logf("Failed commit empty transaction: %s", err)
 			}
 			continue //nothing to do
 		}
 
 		if replace {
-			r.logger.Printf("Replace triggered for view: %s (old: %s, new: %s)", view.GetName(), metadata.Version, view.GetVersion())
+			log.Logf("Replace triggered for view: %s (old: %s, new: %s)", view.GetName(), metadata.Version, view.GetVersion())
 			r.stats.TableReplacements++
 		}
 
 		//run view update
 		if err := view.Update(tx, replace); err != nil {
-			r.logger.Printf("Update for %s failed: %s", view.GetName(), err.Error())
+			log.Logf("Update for %s failed: %s", view.GetName(), err.Error())
 			if err = tx.Rollback(); err != nil {
-				r.logger.Printf("Rollback also failed: %s", err)
+				log.Logf("Rollback also failed: %s", err)
 			}
 			continue
 		}
@@ -138,9 +143,9 @@ func (r *Runner) runOnce() error {
 		//log completion stats
 		_, err = tx.Exec("INSERT INTO materialiser_log (host, view, version, duration_sec) VALUES ($1, $2, $3, $4)", hostname, view.GetName(), view.GetVersion(), time.Since(started).Seconds())
 		if err != nil {
-			r.logger.Printf("Lock log create failed: %s", err)
+			log.Logf("Lock log create failed: %s", err)
 			if err = tx.Rollback(); err != nil {
-				r.logger.Printf("Rollback also failed: %s", err)
+				log.Logf("Rollback also failed: %s", err)
 			}
 			continue
 		}
@@ -148,16 +153,16 @@ func (r *Runner) runOnce() error {
 		//check the final size of the table
 		var viewRowCount int64
 		if err := tx.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", view.GetName())).Scan(&viewRowCount); err != nil {
-			r.logger.Printf("Table Count: %s", err)
+			log.Logf("Table Count: %s", err)
 			if err = tx.Rollback(); err != nil {
-				r.logger.Printf("Rollback also failed: %s", err)
+				log.Logf("Rollback also failed: %s", err)
 			}
 			continue
 		}
 
 		//everything worked... try and commit the changes
 		if err := tx.Commit(); err != nil {
-			r.logger.Printf("Commit failed: %s", err)
+			log.Logf("Commit failed: %s", err)
 			continue
 		}
 
@@ -194,4 +199,43 @@ type ViewStats struct {
 	Name              string  `json:"name"`
 	TableRowsTotal    int64   `json:"table_rows_total"`
 	LastUpdateSeconds float64 `json:"last_update_seconds"`
+}
+
+type Msg struct {
+	Msg   string
+	Debug bool
+}
+
+type LogReceiver interface {
+	Logf(msg string, args ... interface{})
+	Debugf(msg string, args ... interface{})
+}
+
+type NoopLogReceiver struct {
+}
+
+func (r *NoopLogReceiver) Logf(msg string, args ... interface{}) {
+}
+
+func (r *NoopLogReceiver) Debugf(msg string, args ... interface{}) {
+}
+
+func NewChanLogReceiver() *ChanLogReceiver {
+	return &ChanLogReceiver{logs: make(chan *Msg, 1000)}
+}
+
+type ChanLogReceiver struct {
+	logs chan *Msg
+}
+
+func (r *ChanLogReceiver) Logf(msg string, args ... interface{}) {
+	r.logs <- &Msg{Msg: fmt.Sprintf(msg, args...), Debug: false}
+}
+
+func (r *ChanLogReceiver) Debugf(msg string, args ... interface{}) {
+	r.logs <- &Msg{Msg: fmt.Sprintf(msg, args...), Debug: true}
+}
+
+func (r *ChanLogReceiver) Logs() chan *Msg {
+	return r.logs
 }
