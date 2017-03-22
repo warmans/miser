@@ -97,7 +97,6 @@ func (r *Runner) runOnce() error {
 	for _, view := range r.views {
 
 		started := time.Now()
-		log.Debugf("started view %s at %s", view.GetName(), started.Format(time.RFC3339))
 
 		tx, err := r.conn.Begin()
 		if err != nil {
@@ -125,6 +124,8 @@ func (r *Runner) runOnce() error {
 			}
 			continue //nothing to do
 		}
+
+		log.Debugf("started view %s at %s", view.GetName(), started.Format(time.RFC3339))
 
 		if replace {
 			log.Logf("Replace triggered for view: %s (old: %s, new: %s)", view.GetName(), metadata.Version, view.GetVersion())
