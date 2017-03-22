@@ -119,7 +119,7 @@ func (r *Runner) runOnce() error {
 		timeSinceLastUpdate := time.Since(metadata.Created)
 		replace := metadata.Version != view.GetVersion()
 
-		log.Debugf("%s %v minutes since last update (interval is %d)", view.GetName(), timeSinceLastUpdate.Minutes(), view.GetUpdateInterval().Minutes())
+		log.Debugf("%s %v minutes since last update (interval is %v)", view.GetName(), timeSinceLastUpdate.Minutes(), view.GetUpdateInterval().Minutes())
 
 		if !replace && timeSinceLastUpdate  < view.GetUpdateInterval() {
 			if err := tx.Commit(); err != nil {
