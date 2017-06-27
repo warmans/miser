@@ -79,6 +79,7 @@ type TimeseriesView struct {
 	Columns         []*StandardViewColumn
 	Indexes         []string
 	TrackBy         Tracker
+	NoGrouping      bool //if the output tables has the same keys as the input no group by is needed
 }
 
 func (v *TimeseriesView) GetName() string {
@@ -220,14 +221,18 @@ func (v *TimeseriesView) setupTableIndexes(table string, replace bool, tx *sql.T
 }
 
 func (v *TimeseriesView) getInsertSQL(table string, offsets *Offsets) string {
-	return fmt.Sprintf(
-		"INSERT INTO %s SELECT %s FROM %s WHERE %s GROUP BY %s",
+	stmnt := fmt.Sprintf(
+		"INSERT INTO %s SELECT %s FROM %s WHERE %s",
 		table,
 		strings.Join(v.getSelectColumns(), ", "),
 		v.SourceTableName,
 		offsets.SourceOffsetSQL,
-		strings.Join(v.getGroupColumns(), ", "),
 	)
+
+	if !v.NoGrouping {
+		stmnt += fmt.Sprintf(" GROUP BY %s", strings.Join(v.getGroupColumns(), ", "))
+	}
+	return stmnt
 }
 
 func (v *TimeseriesView) getCreateTableSQL(table string) string {
