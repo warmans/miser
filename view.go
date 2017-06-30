@@ -73,13 +73,14 @@ type StandardViewColumn struct {
 
 //TimeseriesView represents the materialised view capable of doing incremental updates
 type TimeseriesView struct {
-	Name            string
-	SourceTableName string
-	UpdateInterval  time.Duration
-	Columns         []*StandardViewColumn
-	Indexes         []string
-	TrackBy         Tracker
-	NoGrouping      bool //if the output tables has the same keys as the input no group by is needed
+	Name             string
+	SourceTableSpec  string
+	UpdateInterval   time.Duration
+	Columns          []*StandardViewColumn
+	Indexes          []string
+	TrackBy          Tracker
+	PrimaryKeyColumn string
+	NoGrouping       bool //if the output tables has the same keys as the input no group by is needed
 }
 
 func (v *TimeseriesView) GetName() string {
@@ -225,7 +226,7 @@ func (v *TimeseriesView) getInsertSQL(table string, offsets *Offsets) string {
 		"INSERT INTO %s SELECT %s FROM %s WHERE %s",
 		table,
 		strings.Join(v.getSelectColumns(), ", "),
-		v.SourceTableName,
+		v.SourceTableSpec,
 		offsets.SourceOffsetSQL,
 	)
 
@@ -241,28 +242,49 @@ func (v *TimeseriesView) getCreateTableSQL(table string) string {
 
 func (v *TimeseriesView) getCreateColumns() []string {
 	columns := make([]string, 0)
-	for _, col := range v.Columns {
-		columns = append(columns, col.CreateSpec)
+	for _, col := range v.getInferredColumns() {
+		if col.CreateSpec != "" {
+			columns = append(columns, col.CreateSpec)
+		}
 	}
+	columns = append(columns, fmt.Sprintf(`PRIMARY KEY ("%s")`, v.getPrimaryKeyColumnName()))
 	return columns
 }
 
 func (v *TimeseriesView) getSelectColumns() []string {
-	columns := make([]string, len(v.Columns))
-	for k, col := range v.Columns {
-		columns[k] = col.SelectSpec
+	columns := make([]string, 0)
+	for _, col := range v.getInferredColumns() {
+		if col.SelectSpec != "" {
+			columns = append(columns, col.SelectSpec)
+		}
 	}
 	return columns
 }
 
 func (v *TimeseriesView) getGroupColumns() []string {
 	columns := make([]string, 0)
-	for _, col := range v.Columns {
-		if col.IsKey {
+	for _, col := range v.getInferredColumns() {
+		if col.IsKey && col.SelectSpec != "" {
 			columns = append(columns, col.SelectSpec)
 		}
 	}
 	return columns
+}
+
+func (v *TimeseriesView) getInferredColumns() []*StandardViewColumn {
+	return append(
+		v.Columns,
+		&StandardViewColumn{CreateSpec: fmt.Sprintf("%s SERIAL", v.getPrimaryKeyColumnName()), SelectSpec: "", IsKey: false},
+	)
+}
+
+func (v *TimeseriesView) getPrimaryKeyColumnName() string {
+	//a primary key will always be generated to allow compatibility with extensions such as pglogical
+	pk := v.PrimaryKeyColumn
+	if pk == "" {
+		pk = "_pk"
+	}
+	return pk
 }
 
 // SQLView represents a simplified materialised view without incremental updates but more freedom in SELECT
@@ -341,8 +363,14 @@ func (v *SQLView) Update(tx *sql.Tx, replace bool) error {
 		indexName := fmt.Sprintf("idx_%s_%d", v.Table.Name, k)
 		alterIndexStmnt := fmt.Sprintf("DROP INDEX IF EXISTS %s; ALTER INDEX %s_temp RENAME TO %s", indexName, indexName, indexName)
 		if _, err := tx.Exec(alterIndexStmnt); err != nil {
-			return fmt.Errorf("rename table failed: %s (%s)", err, alterIndexStmnt)
+			return fmt.Errorf("rename index failed: %s (%s)", err, alterIndexStmnt)
 		}
+	}
+
+	//replace primary key index
+	alterIndexStmnt := fmt.Sprintf("DROP INDEX IF EXISTS %s_pkey; ALTER INDEX %s_temp_pkey RENAME TO %s_pkey", v.Table.Name, v.Table.Name, v.Table.Name)
+	if _, err := tx.Exec(alterIndexStmnt); err != nil {
+		return fmt.Errorf("rename primary key failed: %s (%s)", err, alterIndexStmnt)
 	}
 
 	return nil

@@ -130,7 +130,7 @@ func TestRunnerCleanE2E(t *testing.T) {
 		[]View{
 			&TimeseriesView{
 				Name: "test_view_1",
-				SourceTableName: "test_data_1",
+				SourceTableSpec: "test_data_1",
 				UpdateInterval: time.Minute,
 				Columns: []*StandardViewColumn{
 					{CreateSpec: "ts TIMESTAMP", SelectSpec: "date_trunc('hour', ts)", IsKey: true},
@@ -188,7 +188,7 @@ func TestRunnerIterateE2E(t *testing.T) {
 		[]View{
 			&TimeseriesView{
 				Name: "test_view_2",
-				SourceTableName: "test_data_1",
+				SourceTableSpec: "test_data_1",
 				UpdateInterval: time.Millisecond,
 				Columns: []*StandardViewColumn{
 					{CreateSpec: "ts TIMESTAMP", SelectSpec: "date_trunc('hour', ts)", IsKey: true},

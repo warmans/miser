@@ -9,7 +9,7 @@ func TestTimeseriesView_GetVersionNumCols(t *testing.T) {
 
 	t1 := &TimeseriesView{
 		Name: "test_view_1",
-		SourceTableName: "test_data_1",
+		SourceTableSpec: "test_data_1",
 		UpdateInterval: time.Minute,
 		Columns: []*StandardViewColumn{
 			{CreateSpec: "ts TEXT", SelectSpec: "date_trunc('hour', ts)", IsKey: true},
@@ -25,7 +25,7 @@ func TestTimeseriesView_GetVersionNumCols(t *testing.T) {
 
 	t2 := &TimeseriesView{
 		Name: "test_view_1",
-		SourceTableName: "test_data_1",
+		SourceTableSpec: "test_data_1",
 		UpdateInterval: time.Minute,
 		Columns: []*StandardViewColumn{
 			{CreateSpec: "ts TEXT", SelectSpec: "date_trunc('hour', ts)", IsKey: true},
@@ -50,7 +50,7 @@ func TestTimeseriesView_GetVersionColContent(t *testing.T) {
 
 	t1 := &TimeseriesView{
 		Name: "test_view_1",
-		SourceTableName: "test_data_1",
+		SourceTableSpec: "test_data_1",
 		UpdateInterval: time.Minute,
 		Columns: []*StandardViewColumn{
 			{CreateSpec: "ts TEXT", SelectSpec: "date_trunc('hour', ts)", IsKey: true},
@@ -66,7 +66,7 @@ func TestTimeseriesView_GetVersionColContent(t *testing.T) {
 
 	t2 := &TimeseriesView{
 		Name: "test_view_1",
-		SourceTableName: "test_data_1",
+		SourceTableSpec: "test_data_1",
 		UpdateInterval: time.Minute,
 		Columns: []*StandardViewColumn{
 			{CreateSpec: "ts TEXT", SelectSpec: "date_trunc('hour', ts)", IsKey: true},
