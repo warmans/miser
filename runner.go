@@ -13,14 +13,22 @@ func ReceiveLogs(receiver LogReceiver) {
 	log = receiver
 }
 
-func NewRunner(conn *sql.DB, views []View) *Runner {
-	return &Runner{conn: conn, views: views, stats: &RunnerStats{Views: make([]ViewStats, 0)}}
+func NewRunner(conn *sql.DB, views []View, runIntervalFloor time.Duration, runIntervalBackoff bool) *Runner {
+	return &Runner{
+		conn:               conn,
+		views:              views,
+		stats:              &RunnerStats{Views: make([]ViewStats, 0)},
+		runIntervalFloor:   runIntervalFloor,
+		runIntervalBackoff: runIntervalBackoff,
+	}
 }
 
 type Runner struct {
-	conn  *sql.DB
-	views []View
-	stats *RunnerStats
+	conn               *sql.DB
+	views              []View
+	stats              *RunnerStats
+	runIntervalBackoff bool
+	runIntervalFloor   time.Duration
 }
 
 type Metadata struct {
@@ -79,7 +87,17 @@ func (r *Runner) Run() {
 		if err := r.runOnce(); err != nil {
 			log.Logf("runner encountered error: %s", err.Error())
 		}
-		time.Sleep(time.Minute)
+		// by default the aggregates run at the floor interval (as defined by the constructor)
+		runInterval := r.runIntervalFloor
+		if r.runIntervalBackoff {
+			// however if backoff is enabled the longer the last run took, the longer the interval becomes. The
+			// interval scales in line with the last run duration so if a run takes 5 minutes and the floor is 1
+			// minute the next interval will be 5 minutes
+			if lastInterval := time.Duration(r.stats.LastRunSeconds) * time.Second; lastInterval > r.runIntervalFloor {
+				runInterval = lastInterval
+			}
+		}
+		time.Sleep(runInterval)
 	}
 }
 
@@ -121,7 +139,7 @@ func (r *Runner) runOnce() error {
 
 		log.Debugf("%s %v minutes since last update (interval is %v)", view.GetName(), timeSinceLastUpdate.Minutes(), view.GetUpdateInterval().Minutes())
 
-		if !replace && timeSinceLastUpdate  < view.GetUpdateInterval() {
+		if !replace && timeSinceLastUpdate < view.GetUpdateInterval() {
 			if err := tx.Commit(); err != nil {
 				log.Logf("Failed commit empty transaction: %s", err)
 			}
