@@ -145,6 +145,8 @@ func TestRunnerCleanE2E(t *testing.T) {
 				TrackBy: &DateTracker{SourceDateColumn: "ts", DestinationDateColumn: "ts", Backtrack: time.Hour},
 			},
 		},
+		time.Minute,
+		true,
 	)
 
 	if err := runner.Setup(); err != nil {
@@ -206,6 +208,8 @@ func TestRunnerIterateE2E(t *testing.T) {
 				},
 			},
 		},
+		time.Minute,
+		true,
 	)
 
 	if err := runner.Setup(); err != nil {
