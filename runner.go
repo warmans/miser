@@ -87,12 +87,14 @@ func (r *Runner) Run() {
 		if err := r.runOnce(); err != nil {
 			log.Logf("runner encountered error: %s", err.Error())
 		}
-		// by default the aggregates run at the floor interval (as defined by the constructor)
+		// by default the aggregates are checked at the floor interval (as defined by the constructor) to see if they
+		// need to be run.
 		runInterval := r.runIntervalFloor
 		if r.runIntervalBackoff {
 			// however if backoff is enabled the longer the last run took, the longer the interval becomes. The
 			// interval scales in line with the last run duration so if a run takes 5 minutes and the floor is 1
-			// minute the next interval will be 5 minutes
+			// minute the next interval will be 5 minutes. This will scale back number of runs when all tasks appear
+			// to be slowing down and overloading the DB.
 			if lastInterval := time.Duration(r.stats.LastRunSeconds) * time.Second; lastInterval > r.runIntervalFloor {
 				runInterval = lastInterval
 			}
