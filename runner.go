@@ -32,7 +32,7 @@ type Runner struct {
 	runIntervalCeiling     time.Duration
 
 	//scheduled rebuild
-	rebuildSchedule        *RebuildSchedule
+	rebuildSchedule *RebuildSchedule
 }
 
 type Metadata struct {
@@ -103,27 +103,31 @@ func (r *Runner) Run() {
 			}
 		}
 
+		//if this is the first time it has run then skip the interval and just run straight away.
+		if len(r.stats.Views) > 0 {
+			// by default the aggregates are checked at the floor interval (as defined by the constructor) to see if they
+			// need to be run.
+			runInterval := r.runIntervalFloor
+			if r.intervalBackoffEnabled {
+				// however if back-off is enabled the longer the last run took, the longer the interval becomes. The
+				// interval scales in line with the last run duration so if a run takes 5 minutes and the floor is 1
+				// minute the next interval will be 5 minutes. This will scale back number of runs when all tasks appear
+				// to be slowing down and overloading the DB.
+				if lastInterval := time.Duration(r.stats.LastRunSeconds) * time.Second; lastInterval > r.runIntervalFloor {
+					//limit the max run interval by the ceiling
+					if lastInterval.Seconds() > r.runIntervalCeiling.Seconds() {
+						runInterval = r.runIntervalCeiling
+					} else {
+						runInterval = lastInterval
+					}
+				}
+			}
+			time.Sleep(runInterval)
+		}
+
 		if err := r.runOnce(false); err != nil {
 			log.Logf("runner encountered error: %s", err.Error())
 		}
-		// by default the aggregates are checked at the floor interval (as defined by the constructor) to see if they
-		// need to be run.
-		runInterval := r.runIntervalFloor
-		if r.intervalBackoffEnabled {
-			// however if back-off is enabled the longer the last run took, the longer the interval becomes. The
-			// interval scales in line with the last run duration so if a run takes 5 minutes and the floor is 1
-			// minute the next interval will be 5 minutes. This will scale back number of runs when all tasks appear
-			// to be slowing down and overloading the DB.
-			if lastInterval := time.Duration(r.stats.LastRunSeconds) * time.Second; lastInterval > r.runIntervalFloor {
-				//limit the max run interval by the ceiling
-				if lastInterval.Seconds() > r.runIntervalCeiling.Seconds() {
-					runInterval = r.runIntervalCeiling
-				} else {
-					runInterval = lastInterval
-				}
-			}
-		}
-		time.Sleep(runInterval)
 	}
 }
 
@@ -161,12 +165,7 @@ func (r *Runner) runOnce(forceReplace bool) error {
 
 		//if the last version id different from the current one the view must be replaced
 		timeSinceLastUpdate := time.Since(metadata.Created)
-		replace := metadata.Version != view.GetVersion()
-
-		//replacements can be forced by the caller
-		if forceReplace == true {
-			replace = true
-		}
+		replace := forceReplace || metadata.Version != view.GetVersion()
 
 		log.Debugf("%s %v minutes since last update (interval is %v)", view.GetName(), timeSinceLastUpdate.Minutes(), view.GetUpdateInterval().Minutes())
 
@@ -251,15 +250,19 @@ func (r *Runner) SetBackoffEnabled(runIntervalFloor time.Duration, runIntervalCe
 
 // SetScheduledRebuildEnabled enables/disables a periodic complete view rebuild based on the given schedule instance.
 func (r *Runner) SetScheduledRebuildEnabled(rebuildSchedule *RebuildSchedule) {
+	if r.rebuildSchedule != nil {
+		return
+	}
 	r.rebuildSchedule = rebuildSchedule
 	go rebuildSchedule.Start()
 }
 
 type RunnerStats struct {
-	LastRunSeconds    float64      `json:"last_run_seconds"`
-	LockFailures      int64        `json:"lock_failures"`
-	TableReplacements int64        `json:"table_replacements"`
-	Views             []ViewStats  `json:"view_stats"`
+	LastRunSeconds        float64     `json:"last_run_seconds"`
+	LockFailures          int64       `json:"lock_failures"`
+	TableReplacements     int64       `json:"table_replacements"`
+	ScheduledReplacements int64       `json:"scheduled_replacements"`
+	Views                 []ViewStats `json:"view_stats"`
 }
 
 type ViewStats struct {
