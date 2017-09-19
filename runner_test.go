@@ -97,7 +97,6 @@ func mustGetColumnSum(t *testing.T, conn *sql.DB, table string, column string) i
 	return num
 }
 
-
 func mustGetRowCount(t *testing.T, conn *sql.DB, table string) int64 {
 	var num int64
 	err := conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&num)
@@ -129,9 +128,9 @@ func TestRunnerCleanE2E(t *testing.T) {
 		conn,
 		[]View{
 			&TimeseriesView{
-				Name: "test_view_1",
+				Name:            "test_view_1",
 				SourceTableSpec: "test_data_1",
-				UpdateInterval: time.Minute,
+				UpdateInterval:  time.Minute,
 				Columns: []*StandardViewColumn{
 					{CreateSpec: "ts TIMESTAMP", SelectSpec: "date_trunc('hour', ts)", IsKey: true},
 					{CreateSpec: "key1 TEXT", SelectSpec: "key1", IsKey: true},
@@ -145,16 +144,15 @@ func TestRunnerCleanE2E(t *testing.T) {
 				TrackBy: &DateTracker{SourceDateColumn: "ts", DestinationDateColumn: "ts", Backtrack: time.Hour},
 			},
 		},
-		time.Minute,
-		true,
 	)
+	runner.SetBackoffEnabled(time.Minute, time.Hour)
 
 	if err := runner.Setup(); err != nil {
 		t.Errorf("Runner setup failed: %s", err)
 		return
 	}
 
-	if err := runner.runOnce(); err != nil {
+	if err := runner.runOnce(false); err != nil {
 		t.Errorf("Runner failed with error: %s", err)
 		return
 	}
@@ -189,9 +187,9 @@ func TestRunnerIterateE2E(t *testing.T) {
 		conn,
 		[]View{
 			&TimeseriesView{
-				Name: "test_view_2",
+				Name:            "test_view_2",
 				SourceTableSpec: "test_data_1",
-				UpdateInterval: time.Millisecond,
+				UpdateInterval:  time.Millisecond,
 				Columns: []*StandardViewColumn{
 					{CreateSpec: "ts TIMESTAMP", SelectSpec: "date_trunc('hour', ts)", IsKey: true},
 					{CreateSpec: "key1 TEXT", SelectSpec: "key1", IsKey: true},
@@ -208,18 +206,18 @@ func TestRunnerIterateE2E(t *testing.T) {
 				},
 			},
 		},
-		time.Minute,
-		true,
 	)
+
+	runner.SetBackoffEnabled(time.Minute, time.Hour)
 
 	if err := runner.Setup(); err != nil {
 		t.Errorf("Runner setup failed: %s", err)
 		return
 	}
 
-	for i:=0; i< 10; i++ {
+	for i := 0; i < 10; i++ {
 
-		if err := runner.runOnce(); err != nil {
+		if err := runner.runOnce(false); err != nil {
 			t.Errorf("Runner failed with error: %s", err)
 			return
 		}
@@ -239,6 +237,75 @@ func TestRunnerIterateE2E(t *testing.T) {
 		}
 
 		time.Sleep(time.Millisecond * 5)
+	}
+
+	t.Logf("Dumping stats...")
+	json.NewEncoder(os.Stdout).Encode(runner.GetStats())
+}
+
+func TestRunnerIterateE2EWithRebuildSchedule(t *testing.T) {
+
+	if os.Getenv("E2E") == "" {
+		t.Skip("e2e tests not enabled")
+		return
+	}
+	conn := mustSetupTest(t)
+
+	runner := NewRunner(
+		conn,
+		[]View{
+			&TimeseriesView{
+				Name:            "test_view_3",
+				SourceTableSpec: "test_data_1",
+				UpdateInterval:  time.Millisecond,
+				Columns: []*StandardViewColumn{
+					{CreateSpec: "ts TIMESTAMP", SelectSpec: "date_trunc('hour', ts)", IsKey: true},
+					{CreateSpec: "key1 TEXT", SelectSpec: "key1", IsKey: true},
+					{CreateSpec: "key2 TEXT", SelectSpec: "key2", IsKey: true},
+					//omit 1 key col
+					{CreateSpec: "val1 INTEGER", SelectSpec: "SUM(val1)", IsKey: false},
+					{CreateSpec: "val2 DECIMAL", SelectSpec: "SUM(val2)", IsKey: false},
+					//add one value col
+					{CreateSpec: "val3 DECIMAL", SelectSpec: "SUM(val1::DECIMAL * val2)", IsKey: false},
+				},
+				TrackBy: &DateTracker{SourceDateColumn: "ts", DestinationDateColumn: "ts", Backtrack: time.Hour},
+				Indexes: []string{
+					"ts, key1, key2",
+				},
+			},
+		},
+	)
+
+	runner.SetBackoffEnabled(time.Minute, time.Hour)
+	runner.SetScheduledRebuildEnabled(NewRebuildSchedule(time.Now().Hour(), time.Now().Minute()))
+
+	if err := runner.Setup(); err != nil {
+		t.Errorf("Runner setup failed: %s", err)
+		return
+	}
+
+	for i := 0; i < 10; i++ {
+
+		if err := runner.runOnce(false); err != nil {
+			t.Errorf("Runner failed with error: %s", err)
+			return
+		}
+
+		//with random values cannot know if any aggregation happened
+		t.Logf(
+			"view created with %d rows (vs original %d rows)",
+			mustGetRowCount(t, conn, "test_view_2"),
+			mustGetRowCount(t, conn, "test_data_1"),
+		)
+
+		aggTableVal1Sum := mustGetColumnSum(t, conn, "test_view_3", "val1")
+		baseTableVal1Sum := mustGetColumnSum(t, conn, "test_data_1", "val1")
+		if baseTableVal1Sum != aggTableVal1Sum {
+			t.Errorf("val1 should have the same sum in base and aggregate tables. Actually base was %d and aggregate was %d", baseTableVal1Sum, aggTableVal1Sum)
+			return
+		}
+
+		time.Sleep(time.Second * 5)
 	}
 
 	t.Logf("Dumping stats...")

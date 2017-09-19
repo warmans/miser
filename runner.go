@@ -13,22 +13,26 @@ func ReceiveLogs(receiver LogReceiver) {
 	log = receiver
 }
 
-func NewRunner(conn *sql.DB, views []View, runIntervalFloor time.Duration, runIntervalBackoff bool) *Runner {
+func NewRunner(conn *sql.DB, views []View) *Runner {
 	return &Runner{
-		conn:               conn,
-		views:              views,
-		stats:              &RunnerStats{Views: make([]ViewStats, 0)},
-		runIntervalFloor:   runIntervalFloor,
-		runIntervalBackoff: runIntervalBackoff,
+		conn:  conn,
+		views: views,
+		stats: &RunnerStats{Views: make([]ViewStats, 0)},
 	}
 }
 
 type Runner struct {
-	conn               *sql.DB
-	views              []View
-	stats              *RunnerStats
-	runIntervalBackoff bool
-	runIntervalFloor   time.Duration
+	conn  *sql.DB
+	views []View
+	stats *RunnerStats
+
+	//interval backoff
+	intervalBackoffEnabled bool
+	runIntervalFloor       time.Duration
+	runIntervalCeiling     time.Duration
+
+	//scheduled rebuild
+	rebuildSchedule        *RebuildSchedule
 }
 
 type Metadata struct {
@@ -84,26 +88,46 @@ func (r *Runner) Run() {
 	}
 
 	for {
-		if err := r.runOnce(); err != nil {
+
+		if r.rebuildSchedule != nil {
+			//if there is a pending rebuild catch it otherwise do normal thing.
+			select {
+			case <-r.rebuildSchedule.C:
+				log.Logf("running scheduled rebuild (%s)", time.Now().Format(time.RFC3339))
+				if err := r.runOnce(true); err != nil {
+					log.Logf("runner encountered error: %s", err.Error())
+				}
+				continue
+			default:
+				//do nothing
+			}
+		}
+
+		if err := r.runOnce(false); err != nil {
 			log.Logf("runner encountered error: %s", err.Error())
 		}
 		// by default the aggregates are checked at the floor interval (as defined by the constructor) to see if they
 		// need to be run.
 		runInterval := r.runIntervalFloor
-		if r.runIntervalBackoff {
-			// however if backoff is enabled the longer the last run took, the longer the interval becomes. The
+		if r.intervalBackoffEnabled {
+			// however if back-off is enabled the longer the last run took, the longer the interval becomes. The
 			// interval scales in line with the last run duration so if a run takes 5 minutes and the floor is 1
 			// minute the next interval will be 5 minutes. This will scale back number of runs when all tasks appear
 			// to be slowing down and overloading the DB.
 			if lastInterval := time.Duration(r.stats.LastRunSeconds) * time.Second; lastInterval > r.runIntervalFloor {
-				runInterval = lastInterval
+				//limit the max run interval by the ceiling
+				if lastInterval.Seconds() > r.runIntervalCeiling.Seconds() {
+					runInterval = r.runIntervalCeiling
+				} else {
+					runInterval = lastInterval
+				}
 			}
 		}
 		time.Sleep(runInterval)
 	}
 }
 
-func (r *Runner) runOnce() error {
+func (r *Runner) runOnce(forceReplace bool) error {
 
 	runStartTime := time.Now()
 
@@ -139,6 +163,11 @@ func (r *Runner) runOnce() error {
 		timeSinceLastUpdate := time.Since(metadata.Created)
 		replace := metadata.Version != view.GetVersion()
 
+		//replacements can be forced by the caller
+		if forceReplace == true {
+			replace = true
+		}
+
 		log.Debugf("%s %v minutes since last update (interval is %v)", view.GetName(), timeSinceLastUpdate.Minutes(), view.GetUpdateInterval().Minutes())
 
 		if !replace && timeSinceLastUpdate < view.GetUpdateInterval() {
@@ -151,7 +180,7 @@ func (r *Runner) runOnce() error {
 		log.Debugf("started view %s at %s", view.GetName(), started.Format(time.RFC3339))
 
 		if replace {
-			log.Logf("Replace triggered for view: %s (old: %s, new: %s)", view.GetName(), metadata.Version, view.GetVersion())
+			log.Logf("Replace triggered for view: %s (old: %s, new: %s forced: %v)", view.GetName(), metadata.Version, view.GetVersion(), forceReplace)
 			r.stats.TableReplacements++
 		}
 
@@ -212,6 +241,20 @@ func (r *Runner) GetStats() RunnerStats {
 	return *r.stats
 }
 
+// SetBackoffEnabled enables/disables runner back-off. This will increase time between runs (between the ceiling and floor)
+// based on the last run duration.
+func (r *Runner) SetBackoffEnabled(runIntervalFloor time.Duration, runIntervalCeiling time.Duration) {
+	r.runIntervalCeiling = runIntervalCeiling
+	r.runIntervalFloor = runIntervalFloor
+	r.intervalBackoffEnabled = true
+}
+
+// SetScheduledRebuildEnabled enables/disables a periodic complete view rebuild based on the given schedule instance.
+func (r *Runner) SetScheduledRebuildEnabled(rebuildSchedule *RebuildSchedule) {
+	r.rebuildSchedule = rebuildSchedule
+	go rebuildSchedule.Start()
+}
+
 type RunnerStats struct {
 	LastRunSeconds    float64      `json:"last_run_seconds"`
 	LockFailures      int64        `json:"lock_failures"`
@@ -262,4 +305,31 @@ func (r *ChanLogReceiver) Debugf(msg string, args ... interface{}) {
 
 func (r *ChanLogReceiver) Logs() chan *Msg {
 	return r.logs
+}
+
+func NewRebuildSchedule(hour int, minute int) *RebuildSchedule {
+	return &RebuildSchedule{Hour: hour, Minute: minute, C: make(chan bool, 0)}
+}
+
+type RebuildSchedule struct {
+	Hour   int
+	Minute int
+	C      chan bool
+}
+
+func (s *RebuildSchedule) Start() {
+	for {
+		//figure out when the next run should happen.
+		now := time.Now().Truncate(time.Minute)
+		nextRun := time.Date(now.Year(), now.Month(), now.Day(), s.Hour, s.Minute, 0, 0, now.Location())
+
+		//if the next run is before now then wait till the same time tomorrow.
+		if nextRun.Before(now) {
+			nextRun.Add(time.Hour * 24)
+		}
+		tillNextRun := nextRun.Sub(now)
+
+		time.Sleep(tillNextRun)
+		s.C <- true
+	}
 }
