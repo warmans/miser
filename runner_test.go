@@ -144,8 +144,9 @@ func TestRunnerCleanE2E(t *testing.T) {
 				TrackBy: &DateTracker{SourceDateColumn: "ts", DestinationDateColumn: "ts", Backtrack: time.Hour},
 			},
 		},
+		time.Minute,
 	)
-	runner.SetBackoffEnabled(time.Minute, time.Hour)
+	runner.SetBackoffEnabled(time.Hour)
 
 	if err := runner.Setup(); err != nil {
 		t.Errorf("Runner setup failed: %s", err)
@@ -206,9 +207,10 @@ func TestRunnerIterateE2E(t *testing.T) {
 				},
 			},
 		},
+		time.Minute,
 	)
 
-	runner.SetBackoffEnabled(time.Minute, time.Hour)
+	runner.SetBackoffEnabled(time.Hour)
 
 	if err := runner.Setup(); err != nil {
 		t.Errorf("Runner setup failed: %s", err)
@@ -274,9 +276,10 @@ func TestRunnerIterateE2EWithRebuildSchedule(t *testing.T) {
 				},
 			},
 		},
+		time.Minute,
 	)
 
-	runner.SetBackoffEnabled(time.Minute, time.Hour)
+	runner.SetBackoffEnabled(time.Hour)
 	runner.SetScheduledRebuildEnabled(NewRebuildSchedule(time.Now().Hour(), time.Now().Minute()))
 
 	if err := runner.Setup(); err != nil {

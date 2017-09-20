@@ -13,11 +13,12 @@ func ReceiveLogs(receiver LogReceiver) {
 	log = receiver
 }
 
-func NewRunner(conn *sql.DB, views []View) *Runner {
+func NewRunner(conn *sql.DB, views []View, runInterval time.Duration) *Runner {
 	return &Runner{
-		conn:  conn,
-		views: views,
-		stats: &RunnerStats{Views: make([]ViewStats, 0)},
+		conn:             conn,
+		views:            views,
+		stats:            &RunnerStats{Views: make([]ViewStats, 0)},
+		runIntervalFloor: runInterval,
 	}
 }
 
@@ -242,10 +243,9 @@ func (r *Runner) GetStats() RunnerStats {
 
 // SetBackoffEnabled enables/disables runner back-off. This will increase time between runs (between the ceiling and floor)
 // based on the last run duration.
-func (r *Runner) SetBackoffEnabled(runIntervalFloor time.Duration, runIntervalCeiling time.Duration) {
-	r.runIntervalCeiling = runIntervalCeiling
-	r.runIntervalFloor = runIntervalFloor
+func (r *Runner) SetBackoffEnabled(runIntervalCeiling time.Duration) {
 	r.intervalBackoffEnabled = true
+	r.runIntervalCeiling = runIntervalCeiling
 }
 
 // SetScheduledRebuildEnabled enables/disables a periodic complete view rebuild based on the given schedule instance.
