@@ -121,7 +121,9 @@ func (r *Runner) Run() {
 				if lastInterval.Seconds() > r.runIntervalCeiling.Seconds() {
 					runInterval = r.runIntervalCeiling
 				} else {
-					runInterval = lastInterval
+					if lastInterval.Seconds() > r.runIntervalFloor.Seconds() {
+						runInterval = lastInterval
+					}
 				}
 			}
 		}
@@ -308,29 +310,30 @@ func (r *ChanLogReceiver) Logs() chan *Msg {
 	return r.logs
 }
 
-func NewRebuildSchedule(hour int, minute int) *RebuildSchedule {
-	return &RebuildSchedule{Hour: hour, Minute: minute, C: make(chan bool, 0)}
+func NewRebuildSchedule(hour int) *RebuildSchedule {
+	return &RebuildSchedule{HourOfDay: hour, C: make(chan bool, 0)}
 }
 
 type RebuildSchedule struct {
-	Hour   int
-	Minute int
-	C      chan bool
+	HourOfDay int
+	C         chan bool
 }
 
 func (s *RebuildSchedule) Start() {
 	for {
-		//figure out when the next run should happen.
-		now := time.Now().Truncate(time.Minute)
-		nextRun := time.Date(now.Year(), now.Month(), now.Day(), s.Hour, s.Minute, 0, 0, now.Location())
-
-		//if the next run is before now then wait till the same time tomorrow.
-		if nextRun.Before(now) {
-			nextRun.Add(time.Hour * 24)
-		}
-		tillNextRun := nextRun.Sub(now)
-
-		time.Sleep(tillNextRun)
+		time.Sleep(calculateNextRun(time.Now(), s.HourOfDay))
 		s.C <- true
 	}
+}
+
+func calculateNextRun(now time.Time, hourOfDay int) time.Duration {
+
+	//figure out when the next run should happen.
+	nextRun := time.Date(now.Year(), now.Month(), now.Day(), hourOfDay, 0, 0, 0, now.Location())
+
+	//if the next run is before now then wait till the same time tomorrow.
+	if nextRun.Before(now) {
+		nextRun = nextRun.Add(time.Hour * 24)
+	}
+	return nextRun.Sub(now)
 }

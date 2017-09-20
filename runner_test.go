@@ -314,3 +314,41 @@ func TestRunnerIterateE2EWithRebuildSchedule(t *testing.T) {
 	t.Logf("Dumping stats...")
 	json.NewEncoder(os.Stdout).Encode(runner.GetStats())
 }
+
+func TestCalculateNextRun(t *testing.T) {
+	tests := map[string]struct {
+		Now            time.Time
+		HourOfDay      int
+		ExpectDuration time.Duration
+	}{
+		"one hour in future": {
+			Now:            time.Date(2017, 01, 01, 0, 0, 0, 0, time.Now().Location()),
+			HourOfDay:      1,
+			ExpectDuration: time.Hour,
+		},
+		"6 hours in future": {
+			Now:            time.Date(2017, 01, 01, 0, 0, 0, 0, time.Now().Location()),
+			HourOfDay:      6,
+			ExpectDuration: time.Hour * 6,
+		},
+		"in next day": {
+			Now:            time.Date(2017, 01, 01, 12, 0, 0, 0, time.Now().Location()),
+			HourOfDay:      6,
+			ExpectDuration: time.Hour * 18,
+		},
+		"now is exactly the intended hour of day": {
+			Now:            time.Date(2017, 01, 01, 12, 0, 0, 0, time.Now().Location()),
+			HourOfDay:      12,
+			ExpectDuration: time.Duration(0),
+		},
+	}
+
+	for testName, test := range tests {
+		t.Run(testName, func(t *testing.T) {
+			actualDuration := calculateNextRun(test.Now, test.HourOfDay)
+			if actualDuration.Seconds() != test.ExpectDuration.Seconds() {
+				t.Errorf("wrong next run time. Expected %f actually %f", test.ExpectDuration.Seconds(), actualDuration.Seconds())
+			}
+		})
+	}
+}
